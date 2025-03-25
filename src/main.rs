@@ -1,10 +1,12 @@
-mod client;
-
 use tokio::net::TcpListener;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_tungstenite::accept_async;
+use tokio_tungstenite::tungstenite::protocol::Message;
+use warp::Filter;
 use log::{info, error};
 use serde::Deserialize;
 use std::fs;
+use std::net::SocketAddr;
+use futures_util::{StreamExt, SinkExt};
 
 #[derive(Deserialize)]
 struct Config {
@@ -22,39 +24,39 @@ async fn main() {
         .expect("Failed to parse config file");
 
     let addr = format!("{}:{}", config.address, config.port);
-    let listener = TcpListener::bind(&addr).await.expect("Failed to bind to address");
-    info!("Server listening on {}", addr);
-    println!("Listening on {}", addr);
+    let socket_addr: SocketAddr = addr.parse().expect("Invalid address");
 
-    loop {
-        let (mut socket, _) = listener.accept().await.expect("Failed to accept connection");
-        info!("Accepted connection");
-        println!("Connection received from {}", socket.peer_addr().unwrap());
+    // Serve the HTML file
+    let html = warp::path::end()
+        .and(warp::fs::file("html/index.html"));
 
-        tokio::spawn(async move {
-            let mut buf = [0; 1024];
+    // WebSocket route
+    let ws_route = warp::path("ws")
+        .and(warp::ws())
+        .map(|ws: warp::ws::Ws| {
+            ws.on_upgrade(handle_websocket)
+        });
 
-            loop {
-                let n = match socket.read(&mut buf).await {
-                    Ok(n) if n == 0 => {
-                        info!("Connection closed");
-                        println!("Connection closed");
-                        return;
-                    },
-                    Ok(n) => n,
-                    Err(e) => {
-                        error!("Failed to read from socket; err = {:?}", e);
-                        println!("Failed to read from socket; err = {:?}", e);
-                        return;
-                    }
-                };
+    // Combine routes
+    let routes = html.or(ws_route);
 
-                if socket.write_all(&buf[0..n]).await.is_err() {
-                    error!("Failed to write to socket");
-                    println!("Failed to write to socket");
-                    return;
+    warp::serve(routes).run(socket_addr).await;
+}
+
+async fn handle_websocket(ws: warp::ws::WebSocket) {
+    let (mut write, mut read) = ws.split();
+
+    while let Some(result) = read.next().await {
+        match result {
+            Ok(msg) => {
+                if msg.is_text() || msg.is_binary() {
+                    write.send(msg).await.expect("Failed to send message");
                 }
             }
-        });
+            Err(e) => {
+                error!("Error processing message: {:?}", e);
+                break;
+            }
+        }
     }
 }
