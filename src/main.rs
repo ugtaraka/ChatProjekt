@@ -20,31 +20,31 @@ type PeerMap = Arc<Mutex<HashMap<usize, Tx>>>;
 
 #[tokio::main]
 async fn main() {
-    // Initialize logging from the log4rs.yaml file
+    // Initialiser logning fra log4rs.yaml filen
     log4rs::init_file("log4rs.yaml", Default::default()).unwrap();
-    info!("Starting server...");
-    println!("Starting server...");
+    info!("Starter server...");
+    println!("Starter server...");
 
-    // Read configuration from config.toml
-    let config: Config = toml::from_str(&fs::read_to_string("config.toml").expect("Failed to read config file"))
-        .expect("Failed to parse config file");
+    // Læs konfiguration fra config.toml
+    let config: Config = toml::from_str(&fs::read_to_string("config.toml").expect("Kunne ikke læse konfigurationsfil"))
+        .expect("Kunne ikke parse konfigurationsfil");
 
     let addr = format!("{}:{}", config.address, config.port);
-    let socket_addr: SocketAddr = addr.parse().expect("Invalid address");
+    let socket_addr: SocketAddr = addr.parse().expect("Ugyldig adresse");
 
-    // Shared state for connected clients
+    // Delt tilstand for tilsluttede klienter
     let peers = PeerMap::new(Mutex::new(HashMap::new()));
     let peer_id_counter = Arc::new(Mutex::new(0));
 
-    // Serve the HTML file
+    // Server HTML-filen
     let html = warp::path::end()
         .and(warp::fs::file("html/index.html"))
         .map(|file| {
-            info!("Serving index.html");
+            info!("Serverer index.html");
             file
         });
 
-    // WebSocket route
+    // WebSocket-rute
     let ws_route = warp::path("ws")
         .and(warp::ws())
         .and(with_peers(peers.clone()))
@@ -53,10 +53,10 @@ async fn main() {
             ws.on_upgrade(move |socket| handle_websocket(socket, peers, peer_id_counter))
         });
 
-    // Combine routes
+    // Kombiner ruter
     let routes = html.or(ws_route);
 
-    // Start the server
+    // Start serveren
     warp::serve(routes).run(socket_addr).await;
 }
 
@@ -68,7 +68,7 @@ fn with_peer_id_counter(peer_id_counter: Arc<Mutex<usize>>) -> impl Filter<Extra
     warp::any().map(move || peer_id_counter.clone())
 }
 
-// Handle WebSocket connections
+// Håndter WebSocket-forbindelser
 async fn handle_websocket(ws: warp::ws::WebSocket, peers: PeerMap, peer_id_counter: Arc<Mutex<usize>>) {
     let (mut write, mut read) = ws.split();
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -84,7 +84,7 @@ async fn handle_websocket(ws: warp::ws::WebSocket, peers: PeerMap, peer_id_count
         peers.insert(peer_id, tx.clone());
     }
 
-    // Task to forward messages from the channel to the WebSocket
+    // Opgave til at videresende beskeder fra kanalen til WebSocket
     tokio::spawn(async move {
         while let Some(msg) = rx.recv().await {
             if write.send(warp::ws::Message::binary(msg.into_data())).await.is_err() {
@@ -93,7 +93,7 @@ async fn handle_websocket(ws: warp::ws::WebSocket, peers: PeerMap, peer_id_count
         }
     });
 
-    // Read and broadcast messages asynchronously
+    // Læs og broadcast beskeder asynkront
     while let Some(result) = read.next().await {
         match result {
             Ok(msg) => {
@@ -106,13 +106,13 @@ async fn handle_websocket(ws: warp::ws::WebSocket, peers: PeerMap, peer_id_count
                 }
             }
             Err(e) => {
-                error!("Error processing message: {:?}", e);
+                error!("Fejl ved behandling af besked: {:?}", e);
                 break;
             }
         }
     }
 
-    // Remove the client from the peer set
+    // Fjern klienten fra peer-sættet
     let mut peers = peers.lock().unwrap();
     peers.remove(&peer_id);
 }
